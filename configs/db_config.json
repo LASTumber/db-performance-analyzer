@@ -1,0 +1,10 @@
+{
+  "host": "localhost",
+  "user": "root",
+  "password": "Dont_rush_plz",
+  "database": "nirdatabase",
+  "port": 3306,
+  "allow_local_infile": true,
+  "auth_plugin": "mysql_native_password"
+}
+
