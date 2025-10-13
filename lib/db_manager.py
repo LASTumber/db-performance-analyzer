@@ -1,5 +1,5 @@
-import mysql.connector
-from mysql.connector import Error
+import pymysql
+from pymysql import Error
 from contextlib import contextmanager
 import os
 import subprocess
@@ -7,7 +7,7 @@ import subprocess
 # Конфигурация БД для MySQL
 DB_CONFIG = {
     "host": "localhost",
-    "database": "NIRbase",
+    "database": "nirbase",
     "user": "artem",
     "password": "Dont_rush_plz"
 }
@@ -15,25 +15,26 @@ DB_CONFIG = {
 @contextmanager
 def get_db_connection():
     """
-    Контекстный менеджер для получения и управления соединением с БД MySQL.
-    Автоматически коммитит изменения и закрывает соединение при выходе,
-    откатывает транзакцию при исключении.
+    Контекстный менеджер для получения и управления соединением с БД MySQL (используя PyMySQL).
     """
     conn = None
     try:
-        conn = mysql.connector.connect(**DB_CONFIG)
-        if conn.is_connected():
-            yield conn
-            conn.commit()
-        else:
-            raise Error("Не удалось подключиться к базе данных MySQL")
+        # PyMySQL использует немного другой способ передачи параметров
+        conn = pymysql.connect(
+            host=DB_CONFIG["host"],
+            user=DB_CONFIG["user"],
+            password=DB_CONFIG["password"],
+            database=DB_CONFIG["database"]
+        )
+        yield conn
+        conn.commit()
     except Error as e:
-        if conn and conn.is_connected():
+        if conn:
             conn.rollback()
-        print(f"Ошибка БД MySQL: {e}")
+        print(f"Ошибка БД PyMySQL: {e}")
         raise
     finally:
-        if conn and conn.is_connected():
+        if conn:
             conn.close()
 
 def create_tables():
@@ -231,3 +232,39 @@ def delete_data_by_condition(table_name: str, column_name: str, value):
                 print(f"Данные из таблицы '{table_name}' удалены по условию {column_name} = {value}.")
     except Error as e:
         print(f"Ошибка при удалении данных из таблицы '{table_name}' по условию в MySQL: {e}")
+
+
+# --- ДОБАВЬТЕ ЭТОТ КОД В КОНЕЦ ФАЙЛА lib/db_manager.py ---
+
+def perform_inserts(table_name, columns, data):
+    """
+    Универсальная функция для выполнения пакетной вставки.
+    :param table_name: Имя таблицы.
+    :param columns: Строка с именами столбцов через запятую.
+    :param data: Список кортежей с данными для вставки.
+    """
+    if not data:
+        return
+
+    placeholders = ', '.join(['%s'] * len(data[0]))
+    query = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
+
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.executemany(query, data)
+
+
+def perform_selects(table_name, pk_column, ids):
+    """
+    Универсальная функция для выполнения SELECT по списку ID.
+    :param table_name: Имя таблицы.
+    :param pk_column: Имя столбца с первичным ключом.
+    :param ids: Список ID для поиска.
+    """
+    query = f"SELECT * FROM {table_name} WHERE {pk_column} = %s"
+
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            for entity_id in ids:
+                cur.execute(query, (entity_id,))
+                cur.fetchone()

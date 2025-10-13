@@ -3,7 +3,7 @@ import random
 from datetime import datetime, timedelta
 import bcrypt # Для хеширования паролей
 from lib.db_manager import get_db_connection
-from mysql.connector import Error
+from pymysql import Error
 
 fake = Faker('ru_RU') # Используем русскую локаль для более реалистичных имен
 
@@ -24,23 +24,21 @@ class DataGenerator:
     def _generate_password_hash(self, password):
         """Генерирует хеш пароля."""
         # bcrypt хеширует строку байтов, поэтому кодируем пароль
-        hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+        hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt(rounds=4))
         return hashed.decode('utf-8') # Декодируем обратно в строку для хранения
 
     def generate_client_data(self, count):
-        """Генерирует данные для таблицы clients."""
+        """Генерирует данные для таблицы clients с гарантированно уникальным email."""
         clients_data = []
-        for _ in range(count):
-            while True:
-                email = fake.unique.email()
-                if email not in self.unique_emails:
-                    self.unique_emails.add(email)
-                    break
+        for i in range(count):
+            # Генерируем email с уникальным префиксом
+            # Это намного быстрее и надежнее, чем fake.unique.email() на больших объемах
+            email = f"{i}_{fake.email()}"
+
             password = fake.password()
             password_hash = self._generate_password_hash(password)
             name = fake.name()
             created_at = fake.date_time_between(start_date='-5y', end_date='now')
-            # Updated_at может быть позднее created_at, или тем же
             updated_at = fake.date_time_between(start_date=created_at, end_date='now')
 
             clients_data.append((email, password_hash, name, created_at, updated_at))
@@ -59,13 +57,9 @@ class DataGenerator:
     def generate_section_data(self, count):
         """Генерирует данные для таблицы sections."""
         sections_data = []
-        existing_names = set()
-        for _ in range(count):
-            while True:
-                name = fake.unique.word().capitalize() + " Награды" # Добавим суффикс для уникальности и контекста
-                if name not in existing_names:
-                    existing_names.add(name)
-                    break
+        for i in range(count):
+            # Создаем гарантированно уникальное имя
+            name = f"Секция Наград {i + 1}"
             sections_data.append((name,))
         return sections_data
 
@@ -75,15 +69,12 @@ class DataGenerator:
         if not section_ids:
             print("Предупреждение: Нет секций для привязки категорий.")
             return []
-        existing_names = set()
-        for _ in range(count):
+
+        for i in range(count):
             section_id = random.choice(section_ids)
-            while True:
-                name = fake.unique.word().capitalize() + " Категория"
-                if name not in existing_names:
-                    existing_names.add(name)
-                    break
-            label = fake.slug() # Короткое уникальное имя для URL
+            # Создаем гарантированно уникальные имя и метку
+            name = f"Категория {i + 1}"
+            label = f"category-{i + 1}"
             categories_data.append((section_id, name, label))
         return categories_data
 
@@ -189,10 +180,25 @@ class DataGenerator:
                     # ID для FK уже есть, и нам не нужно их возвращать из insert_data,
                     # кроме как для первичных таблиц (clients, sections и т.д.).
                     # Для целей тестирования мы можем запросить последние ID после вставки
-                    if table_name in ['clients', 'sections', 'categories', 'cards', 'orders', 'order_items']:
-                         cur.execute(f"SELECT {table_name[:-1]}_id FROM {table_name} ORDER BY {table_name[:-1]}_id DESC LIMIT {len(data)};")
-                         fetched_ids = [row[0] for row in cur.fetchall()]
-                         inserted_ids = fetched_ids[::-1] # Возвращаем в том же порядке, в каком вставляли
+                    pk_column_map = {
+                        'clients': 'client_id',
+                        'sections': 'section_id',
+                        'categories': 'category_id',  # <-- Вот здесь исправлена опечатка
+                        'cards': 'card_id',
+                        'orders': 'order_id',
+                        'order_items': 'order_item_id'
+                    }
+
+                    if table_name in pk_column_map:
+                        pk_column = pk_column_map[table_name]
+                        cur.execute(
+                            f"SELECT {pk_column} FROM {table_name} ORDER BY {pk_column} DESC LIMIT {len(data)};")
+                        # В PyMySQL с DictCursor результат будет словарем, поэтому обращаемся по ключу.
+                        # Если вы не использовали DictCursor, оставьте row[0]. Давайте сделаем универсально.
+                        # Для этого перенастроим get_db_connection, чтобы он не использовал DictCursor, так как это влияет на код.
+                        # Давайте вернемся к простому варианту, предполагая, что курсор стандартный.
+                        fetched_ids = [row[0] for row in cur.fetchall()]
+                        inserted_ids = fetched_ids[::-1]  # Возвращаем в том же порядке, в каком вставляли
 
             self.generated_ids[table_name].extend(inserted_ids)
             return inserted_ids
@@ -275,3 +281,10 @@ class DataGenerator:
             print("Не удалось сгенерировать позиции заказа: нет заказов или товаров.")
 
         print("Заполнение базы данных завершено.")
+
+    # Внутри класса DataGenerator в lib/data_generator.py
+
+    def clear_uniques(self):
+        """Сбрасывает состояние генератора уникальных значений Faker."""
+        fake.unique.clear()
+        self.unique_emails.clear()
