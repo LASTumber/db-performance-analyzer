@@ -3,7 +3,6 @@ import os
 import random
 import matplotlib.pyplot as plt
 
-# --- Настройка путей ---
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
 PLOTS_DIR = os.path.join(ROOT_DIR, "plots")
@@ -12,11 +11,7 @@ from lib import db_manager, data_generator, sandbox_manager
 from investigations.perf_analyzer import PerformanceAnalyzer
 from investigations.plotter import Plotter
 
-
-# --- Вспомогательные функции ---
-
 def perform_string_select(table_name, column_name, search_value, operator="="):
-    """Выполняет SELECT по строковому полю с разными операторами."""
     if operator.upper() == 'LIKE':
         query = f"SELECT * FROM {table_name} WHERE {column_name} LIKE %s"
     else:
@@ -28,12 +23,10 @@ def perform_string_select(table_name, column_name, search_value, operator="="):
             cursor.fetchall()
 
 
-# --- Основной скрипт ---
 def run_string_index_investigation():
     print("--- НАЧАЛО ИССЛЕДОВАНИЯ 3.2: ЭФФЕКТИВНОСТЬ СТРОКОВОГО ИНДЕКСА ---")
 
     sandbox_name = "NIRbase_sandbox_str"
-    # --- ИЗМЕНЕНИЕ: Инициализируем Plotter с правильным базовым путем ---
     plotter = Plotter(base_output_dir=PLOTS_DIR)
     analyzer = PerformanceAnalyzer(number=1, repeat=3)
     generator = data_generator.DataGenerator()
@@ -66,7 +59,6 @@ def run_string_index_investigation():
     db_manager.perform_inserts('cards_no_index', cards_columns, cards_data)
     print(f"Обе таблицы заполнены {TOTAL_RECORDS} записями.")
 
-    # --- Исследование SELECT ---
     print("\n[Часть 1] Сравнение производительности SELECT...")
     all_titles = [row[1] for row in cards_data]
     search_titles = random.sample(all_titles, 20)
@@ -99,7 +91,6 @@ def run_string_index_investigation():
         analyzer.measure_time(perform_string_select, 'cards_no_index', 'title', subs, 'LIKE') for subs in
         search_substrings) / len(search_substrings)
 
-    # Построение столбчатой диаграммы
     sub_directory_name = "6b_string_index"
     output_folder = os.path.join(PLOTS_DIR, sub_directory_name)
     os.makedirs(output_folder, exist_ok=True)
@@ -124,7 +115,6 @@ def run_string_index_investigation():
     print(f"График сравнения SELECT сохранен в '{output_folder}'.")
     plt.close(figure)
 
-    # --- Исследование INSERT ---
     print("\n[Часть 2] Сравнение производительности INSERT...")
     insert_counts = [100, 500, 1000, 2500, 5000]
     results_insert = {"Таблица с B-Tree индексом": [], "Таблица без индекса": []}
@@ -151,11 +141,9 @@ def run_string_index_investigation():
         x_label="Количество вставляемых строк",
         y_label="Среднее время выполнения (секунды)",
         filename="perf_index_insert_string",
-        # --- ИЗМЕНЕНИЕ: Указываем подпапку ---
         sub_dir="6b_string_index"
     )
 
-    # --- Очистка ---
     print("\n[Очистка] Удаление песочницы...")
     db_manager.DB_CONFIG['database'] = original_database_name
     sandbox_manager.drop_sandbox_db(sandbox_name)

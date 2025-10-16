@@ -6,10 +6,6 @@ import pickle
 
 
 class SimpleDB:
-    """
-    Реализация простой файловой СУБД.
-    """
-
     def __init__(self, db_path="custom_database"):
         self.db_path = db_path
         self.schema_path = os.path.join(self.db_path, "schema.json")
@@ -18,27 +14,22 @@ class SimpleDB:
         self.schema = self._load_schema()
 
     def _load_schema(self):
-        """Загружает схему из JSON-файла."""
         if os.path.exists(self.schema_path):
             with open(self.schema_path, 'r') as f:
                 return json.load(f)
         return {}
 
     def _save_schema(self):
-        """Сохраняет текущую схему в JSON-файл."""
         with open(self.schema_path, 'w') as f:
             json.dump(self.schema, f, indent=4)
 
     def _get_table_path(self, table_name):
-        """Возвращает путь к файлу данных таблицы."""
         return os.path.join(self.db_path, f"{table_name}.db")
 
     def _get_index_path(self, table_name, column_name):
-        """Возвращает путь к файлу индекса."""
         return os.path.join(self.db_path, f"{table_name}_{column_name}.idx")
 
     def execute(self, query):
-        """Главный метод, который парсит и выполняет SQL-запрос."""
         query = query.strip().lower()
 
         if query.startswith("create table"):
@@ -113,7 +104,6 @@ class SimpleDB:
             if col_info["type"] == "INT":
                 packed_values.append(int(value))
             elif col_info["type"] == "VARCHAR":
-                # Кодируем строку и дополняем ее нулевыми байтами до нужной длины
                 encoded_str = value.encode('utf-8')
                 padded_str = encoded_str.ljust(col_info["len"], b'\0')
                 packed_values.append(padded_str)
@@ -125,7 +115,6 @@ class SimpleDB:
             row_position = f.tell()
             f.write(row_data)
 
-        # Обновление индексов
         for col_name, index in table_info["indexes"].items():
             col_index = [c["name"] for c in table_info["columns"]].index(col_name)
             key = packed_values[col_index]
@@ -150,7 +139,6 @@ class SimpleDB:
 
         results = []
 
-        # Парсинг WHERE
         where_col, where_val = None, None
         if where_clause:
             where_match = re.match(r"(\w+) = (.+)", where_clause.strip())
@@ -164,22 +152,18 @@ class SimpleDB:
             if col_info["type"] == "INT":
                 where_val = int(where_val)
 
-        # --- Логика поиска: с индексом или полный перебор ---
         row_indices_to_read = []
-        # Быстрый путь: используем индекс
         if where_col and where_col in table_info["indexes"]:
             print(f"Используется индекс по полю '{where_col}'...")
             index = table_info["indexes"][where_col]
             if where_val in index:
                 row_indices_to_read.append(index[where_val])
-        # Медленный путь: полный перебор
         else:
             if os.path.exists(table_path):
                 file_size = os.path.getsize(table_path)
                 total_rows = file_size // table_info["size"]
                 row_indices_to_read = range(total_rows)
 
-        # Чтение и фильтрация данных
         with open(table_path, 'rb') as f:
             for row_index in row_indices_to_read:
                 f.seek(row_index * table_info["size"])
@@ -188,21 +172,18 @@ class SimpleDB:
 
                 unpacked_row = list(struct.unpack(table_info["format"], row_data))
 
-                # Декодируем строки из байтов
                 for i, col_info in enumerate(table_info["columns"]):
                     if col_info["type"] == "VARCHAR":
                         unpacked_row[i] = unpacked_row[i].strip(b'\0').decode('utf-8', errors='ignore')
 
                 row_as_dict = {col["name"]: val for col, val in zip(table_info["columns"], unpacked_row)}
 
-                # Если был WHERE, но без индекса, фильтруем здесь
                 if where_col and not (where_col in table_info["indexes"]):
                     if str(row_as_dict.get(where_col)) == str(where_val):
                         results.append(row_as_dict)
                 else:
                     results.append(row_as_dict)
 
-        # Выбор нужных столбцов
         if cols_str.strip() == "*":
             return results
         else:
@@ -210,10 +191,6 @@ class SimpleDB:
             return [{col: row[col] for col in selected_cols} for row in results]
 
     def _execute_delete(self, query):
-        """
-        Выполняет запрос DELETE FROM.
-        Поддерживает 'DELETE FROM table' и 'DELETE FROM table WHERE col = val'.
-        """
         match = re.match(r"delete from (\w+)(?: where (.+))?;?", query)
         if not match:
             raise ValueError("Неверный синтаксис DELETE")
@@ -229,29 +206,24 @@ class SimpleDB:
             print("Таблица пуста, удалять нечего.")
             return
 
-        # Если нет условия WHERE, просто удаляем файл данных и все его индексы
         if not where_clause:
             os.remove(table_path)
             print(f"Все записи из таблицы '{table_name}' удалены.")
-            # Удаляем и файлы индексов
             for col_name in table_info["indexes"]:
                 index_path = self._get_index_path(table_name, col_name)
                 if os.path.exists(index_path):
                     os.remove(index_path)
-                # Очищаем индекс и в памяти
                 table_info["indexes"][col_name].clear()
             return
 
         # --- Логика для DELETE с WHERE ---
 
-        # Парсим условие WHERE
         where_match = re.match(r"(\w+) = (.+)", where_clause.strip())
         if not where_match:
             raise ValueError("Неподдерживаемый синтаксис WHERE для DELETE")
         where_col, where_val = where_match.groups()
         where_val = where_val.strip("'\"").strip(";")
 
-        # Преобразуем значение для поиска
         col_info = next((c for c in table_info["columns"] if c["name"] == where_col), None)
         if not col_info:
             raise ValueError(f"Столбец '{where_col}' не найден в таблице.")
@@ -270,29 +242,21 @@ class SimpleDB:
                 unpacked_row = list(struct.unpack(table_info["format"], row_data))
                 row_as_dict = {col["name"]: val for col, val in zip(table_info["columns"], unpacked_row)}
 
-                # Проверяем условие. Если условие НЕ совпадает, сохраняем строку.
                 if str(row_as_dict.get(where_col)) != str(where_val):
                     rows_to_keep.append(row_data)
 
-        # Перезаписываем файл только теми строками, которые нужно оставить
         with open(table_path, 'wb') as f:
             for row_data in rows_to_keep:
                 f.write(row_data)
 
-        # После изменения файла индексы становятся невалидными. Их нужно перестроить.
         print(f"Записи из таблицы '{table_name}' удалены. Требуется перестройка индексов.")
         for col_name in table_info["indexes"]:
-            # Очищаем старый индекс
             table_info["indexes"][col_name].clear()
-            # Вызываем функцию перестройки индекса
             self._rebuild_index(table_name, col_name)
 
     def _rebuild_index(self, table_name, column_name):
-        """Перестраивает индекс для указанного столбца с нуля."""
-        # Этот метод похож на CREATE INDEX
         table_info = self.schema[table_name]
         index_name = f"idx_{column_name}"  # Пример имени
-        # Вызываем логику создания индекса, которая теперь служит и для перестройки
         self.execute(f"CREATE INDEX {index_name} ON {table_name} ({column_name});")
 
     def _execute_create_index(self, query):
@@ -331,5 +295,5 @@ class SimpleDB:
         with open(index_path, 'wb') as f:
             pickle.dump(index, f)
 
-        self._save_schema()  # Сохраняем информацию о наличии индекса
+        self._save_schema()
         print("Индекс успешно создан.")

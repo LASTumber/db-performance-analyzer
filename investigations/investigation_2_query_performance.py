@@ -1,8 +1,9 @@
 import sys
 import os
 import random
+import time
 
-# --- Настройка путей ---
+# --- 1. НАСТРОЙКА ПУТЕЙ И ИМПОРТЫ ---
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
 PLOTS_DIR = os.path.join(ROOT_DIR, "plots")
@@ -12,197 +13,315 @@ from investigations.perf_analyzer import PerformanceAnalyzer
 from investigations.plotter import Plotter
 
 
-# --- Функции-обертки для выполнения SQL-операций для этого исследования ---
-
-def perform_inserts_for_clients(table_name, data):
-    """Выполняет вставку данных в таблицу clients."""
-    if not data:
-        return
-    columns = "email, password_hash, name, created_at, updated_at"
-    placeholders = ', '.join(['%s'] * len(data[0]))
-    query = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
-    with db_manager.get_db_connection() as connection:
-        with connection.cursor() as cursor:
-            cursor.executemany(query, data)
+# --- 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ УНИКАЛЬНЫХ ЗАПРОСОВ ---
+def select_by_phone_pattern(pattern):
+    with db_manager.get_db_connection() as c:
+        with c.cursor() as cur: cur.execute("SELECT * FROM client_details WHERE phone_number LIKE %s LIMIT 100",
+                                            (pattern,)); cur.fetchall()
 
 
-def perform_selects_by_id(table_name, primary_key_column, ids_to_select):
-    """Выполняет SELECT по списку ID."""
-    query = f"SELECT * FROM {table_name} WHERE {primary_key_column} = %s"
-    with db_manager.get_db_connection() as connection:
-        with connection.cursor() as cursor:
-            for entity_id in ids_to_select:
-                cursor.execute(query, (entity_id,))
-                cursor.fetchone()
+def select_by_label(label):
+    with db_manager.get_db_connection() as c:
+        with c.cursor() as cur: cur.execute("SELECT * FROM categories WHERE label = %s", (label,)); cur.fetchall()
 
 
-def perform_deletes_by_id(table_name, primary_key_column, ids_to_delete):
-    """Выполняет DELETE по списку ID."""
-    query = f"DELETE FROM {table_name} WHERE {primary_key_column} = %s"
-    with db_manager.get_db_connection() as connection:
-        with connection.cursor() as cursor:
-            for entity_id in ids_to_delete:
-                cursor.execute(query, (entity_id,))
+def select_by_price_range(min_price):
+    with db_manager.get_db_connection() as c:
+        with c.cursor() as cur: cur.execute("SELECT * FROM cards WHERE price > %s LIMIT 100",
+                                            (min_price,)); cur.fetchall()
 
 
-def perform_join_select():
-    """Выполняет сложный SELECT с JOIN'ами."""
-    query = """
-        SELECT
-            clients.name AS client_name,
-            orders.order_id,
-            orders.status,
-            cards.title AS product_title,
-            order_items.quantity,
-            order_items.price_at_purchase
-        FROM clients
-        JOIN orders ON clients.client_id = orders.client_id
-        JOIN order_items ON orders.order_id = order_items.order_id
-        JOIN cards ON order_items.card_id = cards.card_id
-        WHERE orders.status = 'delivered'
-        LIMIT 1000;
-    """
-    with db_manager.get_db_connection() as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(query)
-            cursor.fetchall()
+def select_by_status(status):
+    with db_manager.get_db_connection() as c:
+        with c.cursor() as cur: cur.execute("SELECT * FROM orders WHERE status = %s LIMIT 200",
+                                            (status,)); cur.fetchall()
 
 
-# --- Основной скрипт исследования ---
-def run_query_investigation():
-    print("--- НАЧАЛО ИССЛЕДОВАНИЯ 2: ПРОИЗВОДИТЕЛЬНОСТЬ SQL-ЗАПРОСОВ ---")
+def delete_by_status(status):
+    with db_manager.get_db_connection() as c:
+        with c.cursor() as cur: cur.execute("DELETE FROM orders WHERE status = %s", (status,))
 
-    sandbox_name = "NIRbase_sandbox"
-    # --- ИЗМЕНЕНИЕ: Инициализируем Plotter с правильным базовым путем ---
+
+def delete_by_price_range(max_price):
+    with db_manager.get_db_connection() as c:
+        with c.cursor() as cur: cur.execute("DELETE FROM cards WHERE price < %s", (max_price,))
+
+
+def delete_by_name(name):
+    with db_manager.get_db_connection() as c:
+        with c.cursor() as cur: cur.execute("DELETE FROM categories WHERE name = %s", (name,))
+
+
+def delete_by_id_range(max_id):
+    with db_manager.get_db_connection() as c:
+        with c.cursor() as cur: cur.execute("DELETE FROM sections WHERE section_id < %s", (max_id,))
+
+
+def truncate_all_tables():
+    with db_manager.get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SET FOREIGN_KEY_CHECKS = 0;")
+            tables = ['order_items', 'orders', 'cards', 'categories', 'sections', 'client_details', 'clients']
+            for table in tables:
+                cur.execute(f"TRUNCATE TABLE {table};")
+            cur.execute("SET FOREIGN_KEY_CHECKS = 1;")
+
+
+# --- 3. ОСНОВНОЙ СКРИПТ ИССЛЕДОВАНИЯ ---
+def run_final_investigation():
+    print("--- НАЧАЛО ФИНАЛЬНОГО ИССЛЕДОВАНИЯ SQL-ЗАПРОСОВ ---")
+
+    sandbox_name = "NIRbase_final_sandbox"
     plotter = Plotter(base_output_dir=PLOTS_DIR)
     analyzer = PerformanceAnalyzer(number=1, repeat=3)
     generator = data_generator.DataGenerator()
 
-    print(f"\n[Подготовка] Создание и настройка песочницы '{sandbox_name}'...")
+    print(f"\n[Подготовка] Создание песочницы '{sandbox_name}'...")
     sandbox_manager.create_sandbox_db(sandbox_name)
-    original_database_name = db_manager.DB_CONFIG['database']
+    original_db = db_manager.DB_CONFIG['database']
     db_manager.DB_CONFIG['database'] = sandbox_name
-    sandbox_manager.setup_sandbox_tables(sandbox_name)
-    print("Песочница готова.")
+    db_manager.create_tables()
 
-    # --- Исследование INSERT ---
-    print("\n[Часть 1] Исследование производительности INSERT...")
-    insert_counts = [100, 500, 1000, 2500, 5000]
+    # === ГРАФИК 1: ИССЛЕДОВАНИЕ INSERT ===
+    print("\n[ИССЛЕДОВАНИЕ 1/3] Сравнение производительности INSERT...")
+    insert_counts = [100, 500, 1000, 2500]
+    results_insert = {"clients": [], "client_details": [], "sections": [], "categories": [], "cards": [], "orders": []}
 
-    def measure_single_insert_run(table_to_insert, number_of_rows):
+    def measure_manually(insert_func):
+        times = []
+        for _ in range(3):
+            truncate_all_tables()
+            generator.clear_uniques()
+            start = time.perf_counter()
+            insert_func()
+            end = time.perf_counter()
+            times.append(end - start)
+        return min(times)
+
+    for count in insert_counts:
+        print(f"  - Замер INSERT для {count} строк...")
+
+        def do_insert_sections(): db_manager.perform_inserts('sections', 'name', generator.generate_section_data(count))
+
+        results_insert["sections"].append(measure_manually(do_insert_sections))
+
+        def do_insert_clients(): db_manager.perform_inserts('clients',
+                                                            'email, password_hash, name, created_at, updated_at',
+                                                            generator.generate_client_data(count))
+
+        results_insert["clients"].append(measure_manually(do_insert_clients))
+
+        def do_insert_client_details():
+            parent_ids = generator.insert_data('clients', generator.generate_client_data(count))
+            data = generator.generate_client_details_data(parent_ids)
+            db_manager.perform_inserts('client_details', 'client_id, phone_number, address, birth_date', data)
+
+        results_insert["client_details"].append(measure_manually(do_insert_client_details))
+
+        def do_insert_orders():
+            parent_ids = generator.insert_data('clients', generator.generate_client_data(10))
+            data = generator.generate_order_data(count, parent_ids)
+            db_manager.perform_inserts('orders', 'client_id, created_at, status, total_amount', data)
+
+        results_insert["orders"].append(measure_manually(do_insert_orders))
+
+        def do_insert_categories():
+            parent_ids = generator.insert_data('sections', generator.generate_section_data(10))
+            data = generator.generate_category_data(count, parent_ids)
+            db_manager.perform_inserts('categories', 'section_id, name, label', data)
+
+        results_insert["categories"].append(measure_manually(do_insert_categories))
+
+        def do_insert_cards():
+            s_ids = generator.insert_data('sections', generator.generate_section_data(10))
+            c_ids = generator.insert_data('categories', generator.generate_category_data(10, s_ids))
+            data = generator.generate_card_data(count, c_ids)
+            db_manager.perform_inserts('cards',
+                                       'category_id, title, description, image_url, price, stock_quantity, purchases_count',
+                                       data)
+
+        results_insert["cards"].append(measure_manually(do_insert_cards))
+
+    plotter.build_plot(x_data=insert_counts, y_data_dict=results_insert, title="Сравнение производительности INSERT",
+                       x_label="Количество строк", y_label="Время (секунды)", filename="perf_insert_all_tables",
+                       sub_dir="5c_final_comparison")
+
+    # === ПОДГОТОВКА К SELECT / DELETE / JOIN ===
+    print("\n[Подготовка] Заполнение всех таблиц большим объемом данных...")
+    truncate_all_tables()
+    generator.populate_database(num_clients=2000, num_sections=50, num_categories_per_section=10,
+                                num_cards_per_category=40, num_orders_per_client=5)
+    print("Песочница заполнена.")
+
+    # === ГРАФИК 2: ИССЛЕДОВАНИЕ SELECT ===
+    print("\n[ИССЛЕДОВАНИЕ 2/3] Сравнение производительности SELECT...")
+    select_counts = [10, 50, 100, 200, 500]
+    results_select = {
+        "clients (по PK)": [], "client_details (по LIKE phone)": [], "sections (по точному имени)": [],
+        "categories (по label)": [], "cards (по диапазону price)": [], "orders (по статусу)": []
+    }
+
+    with db_manager.get_db_connection() as c:
+        with c.cursor() as cur:
+            cur.execute("SELECT client_id FROM clients");
+            all_client_ids = [r[0] for r in cur.fetchall()]
+            cur.execute("SELECT name FROM sections");
+            all_section_names = [r[0] for r in cur.fetchall()]
+            cur.execute("SELECT label FROM categories");
+            all_category_labels = [r[0] for r in cur.fetchall()]
+
+    for count in select_counts:
+        print(f"  - Замер SELECT для {count} запросов...")
+
+        results_select["clients (по PK)"].append(
+            analyzer.get_mean_time(db_manager.perform_selects, 'clients', 'client_id',
+                                   random.sample(all_client_ids, count)))
+        results_select["client_details (по LIKE phone)"].append(analyzer.get_mean_time(select_by_phone_pattern, "+7%"))
+        results_select["sections (по точному имени)"].append(
+            analyzer.get_mean_time(db_manager.perform_selects, 'sections', 'name',
+                                   random.sample(all_section_names, min(count, len(all_section_names)))))
+        results_select["categories (по label)"].append(
+            analyzer.get_mean_time(select_by_label, random.choice(all_category_labels)))
+        results_select["cards (по диапазону price)"].append(
+            analyzer.get_mean_time(select_by_price_range, random.uniform(1000.0, 4000.0)))
+        results_select["orders (по статусу)"].append(analyzer.get_mean_time(select_by_status, 'shipped'))
+
+    plotter.build_plot(x_data=select_counts, y_data_dict=results_select, title="Сравнение производительности SELECT",
+                       x_label="Количество запросов", y_label="Время (секунды)", filename="perf_select_all_tables",
+                       sub_dir="5c_final_comparison")
+
+    # === ГРАФИК 3: ИССЛЕДОВАНИЕ DELETE ===
+    print("\n[ИССЛЕДОВАНИЕ 3/3] Сравнение производительности DELETE...")
+    delete_iterations = [1, 2, 3]
+    results_delete = {
+        "clients (по PK)": [], "client_details (по PK)": [], "sections (по диапазону ID)": [],
+        "categories (по имени)": [], "cards (по диапазону price)": [], "orders (по статусу)": []
+    }
+
+    print("  - Замер DELETE для 'clients'...")
+    times = []
+    for _ in range(3):
+        db_manager.drop_tables();
+        db_manager.create_tables()
+        generator.populate_database(num_clients=2000)
+        with db_manager.get_db_connection() as c:
+            with c.cursor() as cur: cur.execute("SELECT client_id FROM clients"); ids = [r[0] for r in cur.fetchall()]
+        id_to_del = [random.choice(ids)]
+
+        start = time.perf_counter()
+        db_manager.perform_deletes('clients', 'client_id', id_to_del)
+        end = time.perf_counter()
+        times.append(end - start)
+    results_delete["clients (по PK)"] = times
+
+    print("  - Замер DELETE для 'client_details'...")
+    times = []
+    for _ in range(3):
+        db_manager.drop_tables();
+        db_manager.create_tables()
+        generator.populate_database(num_clients=2000)
+        with db_manager.get_db_connection() as c:
+            with c.cursor() as cur: cur.execute("SELECT client_id FROM client_details"); ids = [r[0] for r in
+                                                                                                cur.fetchall()]
+        id_to_del = [random.choice(ids)]
+
+        start = time.perf_counter()
+        db_manager.perform_deletes('client_details', 'client_id', id_to_del)
+        end = time.perf_counter()
+        times.append(end - start)
+    results_delete["client_details (по PK)"] = times
+
+    print("  - Замер DELETE для 'sections'...")
+    times = []
+    for _ in range(3):
+        db_manager.drop_tables();
+        db_manager.create_tables()
+        generator.populate_database(num_sections=50)
+        start = time.perf_counter()
+        delete_by_id_range(25)
+        end = time.perf_counter()
+        times.append(end - start)
+    results_delete["sections (по диапазону ID)"] = times
+
+    print("  - Замер DELETE для 'categories'...")
+    times = []
+    for _ in range(3):
+        db_manager.drop_tables();
+        db_manager.create_tables()
+        generator.populate_database(num_sections=10, num_categories_per_section=20)
+        with db_manager.get_db_connection() as c:
+            with c.cursor() as cur: cur.execute("SELECT name FROM categories"); names = [r[0] for r in cur.fetchall()]
+        name_to_del = random.choice(names)
+
+        start = time.perf_counter()
+        delete_by_name(name_to_del)
+        end = time.perf_counter()
+        times.append(end - start)
+    results_delete["categories (по имени)"] = times
+
+    print("  - Замер DELETE для 'cards'...")
+    times = []
+    for _ in range(3):
+        db_manager.drop_tables();
+        db_manager.create_tables()
+        generator.populate_database(num_sections=10, num_categories_per_section=10, num_cards_per_category=200)
+        start = time.perf_counter()
+        delete_by_price_range(100.0)
+        end = time.perf_counter()
+        times.append(end - start)
+    results_delete["cards (по диапазону price)"] = times
+
+    print("  - Замер DELETE для 'orders'...")
+    times = []
+    for _ in range(3):
+        db_manager.drop_tables();
+        db_manager.create_tables()
+        generator.populate_database(num_clients=500, num_orders_per_client=10)
+        start = time.perf_counter()
+        delete_by_status('cancelled')
+        end = time.perf_counter()
+        times.append(end - start)
+    results_delete["orders (по статусу)"] = times
+
+    plotter.build_plot(
+        x_data=delete_iterations,
+        y_data_dict=results_delete,
+        title="Сравнение производительности DELETE для всех таблиц",
+        x_label="Номер замера",
+        y_label="Время выполнения (секунды)",
+        filename="perf_delete_all_tables",
+        sub_dir="5c_final_comparison"
+    )
+
+    # === ИССЛЕДОВАНИЕ JOIN ===
+    print("\n[Часть 4] Исследование производительности JOIN-запросов...")
+
+    def measure_join_query(query):
         with db_manager.get_db_connection() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SET FOREIGN_KEY_CHECKS = 0;")
-                cursor.execute(f"TRUNCATE TABLE {table_to_insert}")
-                if table_to_insert == 'clients':
-                    cursor.execute("TRUNCATE TABLE client_details")
-                    cursor.execute("TRUNCATE TABLE orders")
-                cursor.execute("SET FOREIGN_KEY_CHECKS = 1;")
-        generator.clear_uniques()
-        client_data_to_insert = generator.generate_client_data(number_of_rows)
-        perform_inserts_for_clients(table_to_insert, client_data_to_insert)
+                cursor.execute(query)
+                cursor.fetchall()
 
-    results_insert_clients = []
-    for count in insert_counts:
-        print(f"  - Замер INSERT для {count} clients...")
-        time_taken = analyzer.measure_time(measure_single_insert_run, 'clients', count)
-        results_insert_clients.append(time_taken)
+    join_1_query = "SELECT c.name, cd.address FROM clients c JOIN client_details cd ON c.client_id = cd.client_id LIMIT 1000;"
+    time_join_1 = analyzer.get_mean_time(measure_join_query, join_1_query)
+    print(f"  - Среднее время JOIN (один к одному): {time_join_1:.6f} секунд")
 
-    plotter.build_plot(
-        x_data=insert_counts,
-        y_data_dict={"INSERT clients": results_insert_clients},
-        title="Производительность INSERT для таблицы 'clients'",
-        x_label="Количество вставляемых строк",
-        y_label="Среднее время выполнения (секунды)",
-        filename="perf_insert_clients",
-        # --- ИЗМЕНЕНИЕ: Указываем подпапку для этого исследования ---
-        sub_dir="5c_query_performance"
-    )
+    join_2_query = "SELECT s.name, c.name FROM sections s JOIN categories c ON s.section_id = c.section_id LIMIT 5000;"
+    time_join_2 = analyzer.get_mean_time(measure_join_query, join_2_query)
+    print(f"  - Среднее время JOIN (один ко многим): {time_join_2:.6f} секунд")
 
-    # --- Подготовка к SELECT и DELETE ---
-    print("\n[Подготовка] Заполнение песочницы большим объемом данных...")
-    db_manager.drop_tables()
-    db_manager.create_tables()
-    TOTAL_CLIENTS = 2000
-    generator.populate_database(num_clients=TOTAL_CLIENTS, num_sections=5, num_categories_per_section=10,
-                                num_cards_per_category=20, num_orders_per_client=5)
-    print(f"Песочница заполнена. Всего клиентов: {TOTAL_CLIENTS}")
+    join_3_query = "SELECT o.order_id, c.title FROM orders o JOIN order_items oi ON o.order_id = oi.order_id JOIN cards c ON oi.card_id = c.card_id LIMIT 5000;"
+    time_join_3 = analyzer.get_mean_time(measure_join_query, join_3_query)
+    print(f"  - Среднее время JOIN (многие ко многим): {time_join_3:.6f} секунд")
 
-    with db_manager.get_db_connection() as connection:
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT client_id FROM clients")
-            all_client_ids = [row[0] for row in cursor.fetchall()]
-
-    # --- Исследование SELECT ---
-    print("\n[Часть 2] Исследование производительности SELECT по PK...")
-    select_counts = [10, 50, 100, 200, 500]
-    results_select_clients = []
-    for count in select_counts:
-        print(f"  - Замер SELECT для {count} clients...")
-        ids_to_select = random.sample(all_client_ids, count)
-        time_taken = analyzer.measure_time(perform_selects_by_id, 'clients', 'client_id', ids_to_select)
-        results_select_clients.append(time_taken)
-
-    plotter.build_plot(
-        x_data=select_counts,
-        y_data_dict={"SELECT clients": results_select_clients},
-        title="Производительность SELECT по PK для таблицы 'clients'",
-        x_label="Количество запрашиваемых строк (по одной)",
-        y_label="Среднее время выполнения (секунды)",
-        filename="perf_select_clients",
-        # --- ИЗМЕНЕНИЕ: Указываем подпапку для этого исследования ---
-        sub_dir="5c_query_performance"
-    )
-
-    # --- Исследование DELETE ---
-    print("\n[Часть 3] Исследование производительности DELETE по PK...")
-    delete_counts = [10, 50, 100, 200, 500]
-    results_delete_clients = []
-    available_ids_for_delete = list(all_client_ids)
-    for count in delete_counts:
-        print(f"  - Замер DELETE для {count} clients...")
-        if len(available_ids_for_delete) < count:
-            print(f"    Пропуск: недостаточно ID для удаления ({len(available_ids_for_delete)} осталось).")
-            continue
-        ids_to_delete = random.sample(available_ids_for_delete, count)
-        available_ids_for_delete = [client_id for client_id in available_ids_for_delete if
-                                    client_id not in ids_to_delete]
-        time_taken = analyzer.measure_time(perform_deletes_by_id, 'clients', 'client_id', ids_to_delete)
-        results_delete_clients.append(time_taken)
-
-    plotter.build_plot(
-        x_data=delete_counts[:len(results_delete_clients)],
-        y_data_dict={"DELETE clients": results_delete_clients},
-        title="Производительность DELETE по PK для таблицы 'clients'",
-        x_label="Количество удаляемых строк (по одной)",
-        y_label="Среднее время выполнения (секунды)",
-        filename="perf_delete_clients",
-        # --- ИЗМЕНЕНИЕ: Указываем подпапку для этого исследования ---
-        sub_dir="5c_query_performance"
-    )
-
-    # --- Исследование JOIN ---
-    print("\n[Часть 4] Исследование производительности SELECT с JOIN...")
-    join_times = []
-    for i in range(5):
-        print(f"  - Замер JOIN #{i + 1}...")
-        time_taken = analyzer.measure_time(perform_join_select)
-        if time_taken != float('inf'):
-            join_times.append(time_taken)
-    if join_times:
-        average_join_time = sum(join_times) / len(join_times)
-        print(f"  -> Среднее время выполнения сложного JOIN-запроса: {average_join_time:.6f} секунд")
-    else:
-        print("  -> Не удалось измерить время выполнения JOIN-запроса.")
-
-    # --- Очистка ---
+    # === ОЧИСТКА ===
     print("\n[Очистка] Удаление песочницы...")
-    db_manager.DB_CONFIG['database'] = original_database_name
+    db_manager.DB_CONFIG['database'] = original_db
     sandbox_manager.drop_sandbox_db(sandbox_name)
 
-    print("\n--- ИССЛЕДОВАНИЕ 2 ЗАВЕРШЕНО ---")
-    print(f"Результаты сохранены в папку '{os.path.join(PLOTS_DIR, '5c_query_performance')}'.")
+    print("\n--- ФИНАЛЬНОЕ ИССЛЕДОВАНИЕ ЗАВЕРШЕНО ---")
+    print(f"Результаты сохранены в папку '{os.path.join(PLOTS_DIR, '5c_final_comparison')}'.")
 
 
 if __name__ == "__main__":
-    run_query_investigation()
+    run_final_investigation()

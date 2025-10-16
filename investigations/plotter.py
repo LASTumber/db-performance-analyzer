@@ -5,13 +5,8 @@ import os
 
 
 class Plotter:
-    """
-    Класс для построения и сохранения графиков.
-    """
-
     def __init__(self, base_output_dir="plots"):
         self.base_output_dir = base_output_dir
-        # Создаем базовую папку, если ее нет
         if not os.path.exists(self.base_output_dir):
             os.makedirs(self.base_output_dir)
 
@@ -20,19 +15,11 @@ class Plotter:
         self.colors = plt.cm.get_cmap('tab10').colors
 
     def build_plot(self, x_data, y_data_dict, title, x_label, y_label, filename, sub_dir=None):
-        """
-        Строит график и сохраняет его в файл.
-        Может сохранять в поддиректорию внутри базовой папки.
-
-        :param sub_dir: Имя поддиректории для сохранения (например, 'part_5b_generation').
-        """
-        # --- НОВОЕ: Логика для создания поддиректории ---
         output_dir = self.base_output_dir
         if sub_dir:
             output_dir = os.path.join(self.base_output_dir, sub_dir)
             if not os.path.exists(output_dir):
                 os.makedirs(output_dir)
-        # --- КОНЕЦ НОВОГО БЛОКА ---
 
         plt.style.use('seaborn-v0_8-whitegrid')
         fig, ax = plt.subplots(figsize=(12, 8))
@@ -53,7 +40,6 @@ class Plotter:
         ax.legend(fontsize=10)
         ax.tick_params(axis='both', which='major', labelsize=10)
 
-        # Сохраняем в правильную директорию
         svg_path = os.path.join(output_dir, f"{filename}.svg")
         png_path = os.path.join(output_dir, f"{filename}.png")
 

@@ -4,7 +4,6 @@ from contextlib import contextmanager
 import os
 import subprocess
 
-# Конфигурация БД для MySQL
 DB_CONFIG = {
     "host": "localhost",
     "database": "nirbase",
@@ -14,12 +13,8 @@ DB_CONFIG = {
 
 @contextmanager
 def get_db_connection():
-    """
-    Контекстный менеджер для получения и управления соединением с БД MySQL (используя PyMySQL).
-    """
     conn = None
     try:
-        # PyMySQL использует немного другой способ передачи параметров
         conn = pymysql.connect(
             host=DB_CONFIG["host"],
             user=DB_CONFIG["user"],
@@ -38,10 +33,6 @@ def get_db_connection():
             conn.close()
 
 def create_tables():
-    """
-    Создает таблицы для интернет-магазина в базе данных MySQL,
-    если они еще не существуют.
-    """
     create_table_queries = [
         """
         CREATE TABLE IF NOT EXISTS clients (
@@ -124,12 +115,8 @@ def create_tables():
         print(f"Ошибка при создании таблиц в MySQL: {e}")
 
 def drop_tables():
-    """
-    Удаляет все таблицы, используемые в проекте из MySQL.
-    Использовать с осторожностью!
-    """
     drop_table_queries = [
-        "SET FOREIGN_KEY_CHECKS = 0;", # Отключаем проверку внешних ключей для безопасного удаления
+        "SET FOREIGN_KEY_CHECKS = 0;",
         "DROP TABLE IF EXISTS order_items;",
         "DROP TABLE IF EXISTS orders;",
         "DROP TABLE IF EXISTS cards;",
@@ -137,7 +124,7 @@ def drop_tables():
         "DROP TABLE IF EXISTS sections;",
         "DROP TABLE IF EXISTS client_details;",
         "DROP TABLE IF EXISTS clients;",
-        "SET FOREIGN_KEY_CHECKS = 1;" # Включаем проверку обратно
+        "SET FOREIGN_KEY_CHECKS = 1;"
     ]
     try:
         with get_db_connection() as conn:
@@ -149,10 +136,6 @@ def drop_tables():
         print(f"Ошибка при удалении таблиц из MySQL: {e}")
 
 def backup_database(backup_file="backup.sql"):
-    """
-    Создает бэкап схемы и данных базы данных MySQL в SQL файл.
-    Требует утилиты mysqldump, которая должна быть доступна в PATH.
-    """
     db_name = DB_CONFIG["database"]
     user = DB_CONFIG["user"]
     password = DB_CONFIG["password"]
@@ -177,11 +160,6 @@ def backup_database(backup_file="backup.sql"):
         print(f"Неизвестная ошибка при создании бэкапа MySQL: {e}")
 
 def restore_database(backup_file="backup.sql"):
-    """
-    Восстанавливает базу данных MySQL из SQL файла.
-    Требует утилиты mysql клиента, которая должна быть доступна в PATH.
-    Использовать с осторожностью! Удалит существующие данные.
-    """
     if not os.path.exists(backup_file):
         print(f"Файл бэкапа {backup_file} не найден.")
         return
@@ -210,39 +188,27 @@ def restore_database(backup_file="backup.sql"):
         print(f"Неизвестная ошибка при восстановлении базы данных MySQL: {e}")
 
 
-# Вспомогательная функция для удаления всех данных из таблицы
 def delete_all_data_from_table(table_name: str):
-    """Удаляет все данные из указанной таблицы MySQL."""
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cur:
-                # В MySQL TRUNCATE TABLE также сбрасывает AUTO_INCREMENT
                 cur.execute(f"TRUNCATE TABLE {table_name};")
                 print(f"Все данные из таблицы '{table_name}' удалены.")
     except Error as e:
         print(f"Ошибка при удалении данных из таблицы '{table_name}' в MySQL: {e}")
 
 def delete_data_by_condition(table_name: str, column_name: str, value):
-    """Удаляет данные из указанной таблицы MySQL по условию."""
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cur:
-                # Используем параметризованный запрос для безопасности и правильного экранирования
                 cur.execute(f"DELETE FROM {table_name} WHERE {column_name} = %s;", (value,))
                 print(f"Данные из таблицы '{table_name}' удалены по условию {column_name} = {value}.")
     except Error as e:
         print(f"Ошибка при удалении данных из таблицы '{table_name}' по условию в MySQL: {e}")
 
 
-# --- ДОБАВЬТЕ ЭТОТ КОД В КОНЕЦ ФАЙЛА lib/db_manager.py ---
 
 def perform_inserts(table_name, columns, data):
-    """
-    Универсальная функция для выполнения пакетной вставки.
-    :param table_name: Имя таблицы.
-    :param columns: Строка с именами столбцов через запятую.
-    :param data: Список кортежей с данными для вставки.
-    """
     if not data:
         return
 
@@ -255,12 +221,6 @@ def perform_inserts(table_name, columns, data):
 
 
 def perform_selects(table_name, pk_column, ids):
-    """
-    Универсальная функция для выполнения SELECT по списку ID.
-    :param table_name: Имя таблицы.
-    :param pk_column: Имя столбца с первичным ключом.
-    :param ids: Список ID для поиска.
-    """
     query = f"SELECT * FROM {table_name} WHERE {pk_column} = %s"
 
     with get_db_connection() as conn:
@@ -268,3 +228,23 @@ def perform_selects(table_name, pk_column, ids):
             for entity_id in ids:
                 cur.execute(query, (entity_id,))
                 cur.fetchone()
+
+
+def perform_deletes(table_name, pk_column, ids):
+    if not ids:
+        return
+
+    query = f"DELETE FROM {table_name} WHERE {pk_column} IN (%s)"
+
+    with get_db_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(query, (ids,))
+
+def perform_inserts_ignore(table_name, columns, data_rows):
+    if not data_rows:
+        return
+    placeholders = ', '.join(['%s'] * len(data_rows[0]))
+    query = f"INSERT IGNORE INTO {table_name} ({columns}) VALUES ({placeholders})"
+    with get_db_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.executemany(query, data_rows)

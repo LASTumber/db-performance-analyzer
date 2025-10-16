@@ -1,16 +1,11 @@
 import sys
 import os
 
-# Добавляем корневую директорию проекта в sys.path,
-# чтобы можно было импортировать модули из lib и investigations
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib import db_manager, data_generator, sandbox_manager
 
 def run_all_tests():
-    """
-    Запускает последовательную проверку всех основных функций.
-    """
     print("--- НАЧАЛО ТЕСТИРОВАНИЯ ---")
 
     # --- Тест 1: db_manager ---
@@ -21,7 +16,7 @@ def run_all_tests():
         print("[ТЕСТ 1] УСПЕХ: Таблицы успешно пересозданы.")
     except Exception as e:
         print(f"[ТЕСТ 1] ПРОВАЛ: Ошибка при работе с таблицами: {e}")
-        return # Прекращаем тесты, если база не работает
+        return
 
     # --- Тест 2: data_generator ---
     print("\n[ТЕСТ 2] Проверка data_generator: заполнение основной БД небольшим количеством данных.")
@@ -45,12 +40,10 @@ def run_all_tests():
     try:
         db_manager.backup_database(backup_file)
         print("Бэкап создан.")
-        # Для проверки восстановления, мы удаляем таблицы и восстанавливаем из бэкапа
         db_manager.drop_tables()
         print("Таблицы удалены перед восстановлением.")
         db_manager.restore_database(backup_file)
         print("Восстановление из бэкапа выполнено.")
-        # Простая проверка: если create_tables не выдаст ошибку, значит, таблицы существуют
         db_manager.create_tables()
         print("[ТЕСТ 3] УСПЕХ: Бэкап и восстановление прошли без ошибок.")
     except Exception as e:

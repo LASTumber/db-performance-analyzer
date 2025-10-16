@@ -1,8 +1,6 @@
 import sys
 import os
-import time
 
-# --- Настройка путей ---
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
 PLOTS_DIR = os.path.join(ROOT_DIR, "plots")
@@ -35,9 +33,12 @@ def run_generation_investigation():
 
     print("\n[Часть 1] Измерение времени для отдельных таблиц...")
     single_table_results = {
-        "clients (с уникальным email)": [],
-        "sections (с уникальным именем)": [],
-        "cards (простая генерация)": []
+        "clients": [],
+        "client_details": [],
+        "sections": [],
+        "categories": [],
+        "cards": [],
+        "orders": [],
     }
 
     for count in row_counts:
@@ -45,24 +46,34 @@ def run_generation_investigation():
 
         generator.clear_uniques()
         time_clients = analyzer.measure_time(measure_simple_generation, generator.generate_client_data, count)
-        single_table_results["clients (с уникальным email)"].append(time_clients)
+        single_table_results["clients"].append(time_clients)
+
+        fake_client_ids = list(range(1, count + 1))
+        time_client_details = analyzer.measure_time(generator.generate_client_details_data, fake_client_ids)
+        single_table_results["client_details"].append(time_client_details)
 
         generator.clear_uniques()
         time_sections = analyzer.measure_time(measure_simple_generation, generator.generate_section_data, count)
-        single_table_results["sections (с уникальным именем)"].append(time_sections)
+        single_table_results["sections"].append(time_sections)
 
-        generator.clear_uniques()
+        fake_section_ids = list(range(1, 101))
+        time_categories = analyzer.measure_time(generator.generate_category_data, count, fake_section_ids)
+        single_table_results["categories"].append(time_categories)
+
         fake_category_ids = list(range(1, 101))
         time_cards = analyzer.measure_time(generator.generate_card_data, count, fake_category_ids)
-        single_table_results["cards (простая генерация)"].append(time_cards)
+        single_table_results["cards"].append(time_cards)
+
+        time_orders = analyzer.measure_time(generator.generate_order_data, count, fake_client_ids)
+        single_table_results["orders"].append(time_orders)
 
     plotter.build_plot(
         x_data=row_counts,
         y_data_dict=single_table_results,
-        title="Время генерации данных для отдельных таблиц",
+        title="Время генерации данных для каждой таблицы",
         x_label="Количество генерируемых строк",
         y_label="Среднее время выполнения (секунды)",
-        filename="generation_time_single_tables",
+        filename="generation_time_all_single_tables",
         sub_dir="5b_data_generation"
     )
 

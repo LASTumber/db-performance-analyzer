@@ -2,7 +2,6 @@ import sys
 import os
 import random
 
-# --- Настройка путей ---
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
 PLOTS_DIR = os.path.join(ROOT_DIR, "plots")
@@ -11,11 +10,7 @@ from lib import db_manager, data_generator, sandbox_manager
 from investigations.perf_analyzer import PerformanceAnalyzer
 from investigations.plotter import Plotter
 
-
-# --- Вспомогательные функции для этого исследования ---
-
 def create_table_without_primary_key(original_table_name, new_table_name):
-    """Создает копию таблицы, но без первичного ключа."""
     with db_manager.get_db_connection() as connection:
         with connection.cursor() as cursor:
             cursor.execute(f"SHOW CREATE TABLE {original_table_name}")
@@ -39,7 +34,6 @@ def create_table_without_primary_key(original_table_name, new_table_name):
 
 
 def perform_range_select(table_name, column_name, max_value):
-    """Выполняет SELECT по диапазону."""
     query = f"SELECT * FROM {table_name} WHERE {column_name} < %s"
     with db_manager.get_db_connection() as connection:
         with connection.cursor() as cursor:
@@ -47,12 +41,10 @@ def perform_range_select(table_name, column_name, max_value):
             cursor.fetchall()
 
 
-# --- Основной скрипт исследования ---
 def run_primary_key_index_investigation():
     print("--- НАЧАЛО ИССЛЕДОВАНИЯ 3.1: ЭФФЕКТИВНОСТЬ ПЕРВИЧНОГО КЛЮЧА ---")
 
     sandbox_name = "NIRbase_sandbox_pk"
-    # --- ИЗМЕНЕНИЕ: Инициализируем Plotter с правильным базовым путем ---
     plotter = Plotter(base_output_dir=PLOTS_DIR)
     analyzer = PerformanceAnalyzer(number=1, repeat=3)
     generator = data_generator.DataGenerator()
@@ -64,7 +56,6 @@ def run_primary_key_index_investigation():
     sandbox_manager.setup_sandbox_tables(sandbox_name)
     create_table_without_primary_key('clients', 'clients_no_pk')
 
-    # --- Исследование INSERT ---
     print("\n[Часть 1] Сравнение производительности INSERT...")
     insert_counts = [100, 500, 1000, 2500, 5000]
     results_insert = {"Таблица с Primary Key": [], "Таблица без Primary Key": []}
@@ -102,11 +93,9 @@ def run_primary_key_index_investigation():
         x_label="Количество вставляемых строк",
         y_label="Среднее время выполнения (секунды)",
         filename="perf_index_insert_pk",
-        # --- ИЗМЕНЕНИЕ: Указываем подпапку ---
         sub_dir="6a_primary_key_index"
     )
 
-    # --- Исследование SELECT ---
     print("\n[Часть 2] Сравнение производительности SELECT...")
     print("  - Заполнение таблиц данными для тестов...")
     TOTAL_RECORDS = 20000
@@ -122,7 +111,6 @@ def run_primary_key_index_investigation():
             cursor.execute("SELECT client_id FROM clients")
             all_ids = [row[0] for row in cursor.fetchall()]
 
-    # SELECT по равенству
     select_counts = [10, 100, 500, 1000]
     results_select_equality = {"Таблица с Primary Key": [], "Таблица без Primary Key": []}
     for count in select_counts:
@@ -140,11 +128,9 @@ def run_primary_key_index_investigation():
         x_label="Количество запрашиваемых строк (по одной)",
         y_label="Среднее время выполнения (секунды)",
         filename="perf_index_select_eq_pk",
-        # --- ИЗМЕНЕНИЕ: Указываем подпапку ---
         sub_dir="6a_primary_key_index"
     )
 
-    # SELECT по диапазону
     range_percents = [0.01, 0.05, 0.1, 0.2]
     results_select_range = {"Таблица с Primary Key": [], "Таблица без Primary Key": []}
     x_axis_range = [int(p * TOTAL_RECORDS) for p in range_percents]
@@ -164,11 +150,9 @@ def run_primary_key_index_investigation():
         x_label="Количество строк в диапазоне (WHERE id < N)",
         y_label="Среднее время выполнения (секунды)",
         filename="perf_index_select_range_pk",
-        # --- ИЗМЕНЕНИЕ: Указываем подпапку ---
         sub_dir="6a_primary_key_index"
     )
 
-    # --- Очистка ---
     print("\n[Очистка] Удаление песочницы...")
     db_manager.DB_CONFIG['database'] = original_database_name
     sandbox_manager.drop_sandbox_db(sandbox_name)
